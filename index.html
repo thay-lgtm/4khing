@@ -319,24 +319,20 @@ tr:hover td{background:rgba(255,215,0,0.022);}
 // ============================================================
 // STORAGE — Google Sheets (Shared Online Database)
 // ============================================================
-// 🔧 ຕັ້ງຄ່າ: ໃສ່ URL ຂອງ Google Apps Script Web App ຂ້າງລຸ່ມ
-// (ເບິ່ງໄຟລ໌ Code.gs ສຳລັບຂັ້ນຕອນ Deploy)
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbx3Vg_XKzgBOciyEVwnDGc8pv2QI-zPhmL_POUwVgfW1wnAXN4kHJmjTDY9j2SSJUdJ/exec';
-// e.g. 'https://script.google.com/macros/s/AKfycb.../exec'
+const SK      = '4khing_v1_cache';
+const GAS_KEY = '4khing_gas_url';
 
-const SK = '4khing_v1_cache'; // localStorage cache
+// Load GAS_URL from localStorage (user sets it in Settings)
+let GAS_URL = localStorage.getItem(GAS_KEY) || '';
 
-// ================================
-// SYNC STATE
-// ================================
-let _saveTimer   = null;
-let _isSaving    = false;
+const SK2 = '4khing_v1_cache';
+
+let _saveTimer    = null;
+let _isSaving     = false;
 let _syncIndicator = null;
 
 function showSyncStatus(status) {
-  if (!_syncIndicator) {
-    _syncIndicator = document.getElementById('syncind');
-  }
+  if (!_syncIndicator) _syncIndicator = document.getElementById('syncind');
   if (!_syncIndicator) return;
   const icons  = { saving:'⏳', saved:'🟢', error:'🔴', loading:'🔄' };
   const colors = { saving:'var(--gold)', saved:'var(--green)', error:'var(--red)', loading:'var(--blue)' };
@@ -347,7 +343,7 @@ function showSyncStatus(status) {
 }
 
 function isGASConfigured() {
-  return GAS_URL && !GAS_URL.includes('ໃສ່_') && GAS_URL.startsWith('https://');
+  return GAS_URL && GAS_URL.startsWith('https://') && GAS_URL.includes('script.google.com');
 }
 
 // ================================
@@ -359,12 +355,12 @@ function gasRequest(action, payload) {
     const url = new URL(GAS_URL);
     url.searchParams.set('action', action);
     url.searchParams.set('callback', cbName);
-    if (payload) {
-      url.searchParams.set('data', encodeURIComponent(JSON.stringify(payload)));
-    }
+    if (payload) url.searchParams.set('data', encodeURIComponent(JSON.stringify(payload)));
+
     window[cbName] = function(data) {
       delete window[cbName];
       if (script.parentNode) script.parentNode.removeChild(script);
+      clearTimeout(timer);
       resolve(data);
     };
     const script = document.createElement('script');
@@ -372,6 +368,7 @@ function gasRequest(action, payload) {
     script.onerror = function() {
       delete window[cbName];
       if (script.parentNode) script.parentNode.removeChild(script);
+      clearTimeout(timer);
       reject(new Error('JSONP failed'));
     };
     const timer = setTimeout(function() {
@@ -379,7 +376,6 @@ function gasRequest(action, payload) {
       if (script.parentNode) script.parentNode.removeChild(script);
       reject(new Error('Timeout'));
     }, 15000);
-    script._timer = timer;
     document.head.appendChild(script);
   });
 }
@@ -400,11 +396,7 @@ async function loadData() {
       showSyncStatus('saved');
       return result.data;
     }
-    // ok:true but data:null means sheet empty — use defaults
-    if (result && result.ok) {
-      showSyncStatus('saved');
-      return null;
-    }
+    if (result && result.ok) { showSyncStatus('saved'); return null; }
     throw new Error(result?.error || 'No data');
   } catch(e) {
     console.warn('Sheets load failed:', e);
@@ -430,12 +422,9 @@ function saveData() {
       if (!result || !result.ok) throw new Error(result?.error || 'save failed');
       showSyncStatus('saved');
     } catch(e) {
-      console.error('Sheets save failed:', e);
       showSyncStatus('error');
-      showToast('⚠ Sheets sync ລົ້ມເຫຼວ — cache ໄວ້ໃນ browser', 'error');
-    } finally {
-      _isSaving = false;
-    }
+      showToast('⚠ Sheets sync ລົ້ມເຫຼວ', 'error');
+    } finally { _isSaving = false; }
   }, 1500);
 }
 
@@ -448,24 +437,18 @@ async function pollCloud() {
   try {
     const result = await gasRequest('load');
     if (!result || !result.ok || !result.data) return;
-    const data = result.data;
-    const sig = (data.actLogs?.[0]?.id || '') + '_' + (data.revenues?.length || 0);
+    const sig = (result.data.actLogs?.[0]?.id||'') + '_' + (result.data.revenues?.length||0);
     if (sig !== _pollSig && _pollSig !== '') {
       _pollSig = sig;
-      Object.assign(DB, data);
+      Object.assign(DB, result.data);
       localStorage.setItem(SK, JSON.stringify(DB));
       navigate(SESSION.page);
       updateBadge();
       showToast('🔄 ຂໍ້ມູນອັບເດດຈາກ Google Sheets');
-    } else {
-      _pollSig = sig;
-    }
+    } else { _pollSig = sig; }
   } catch(e) {}
 }
-
-function startPolling() {
-  setInterval(pollCloud, 30000);
-}
+function startPolling() { setInterval(pollCloud, 30000); }
 
 // ============================================================
 // DEFAULT DATA
@@ -1820,10 +1803,42 @@ function clearLogs(){ if(!confirm('ລ້າງ Log ທັງໝົດ?')) retur
 // PAGE: SETTINGS
 // ============================================================
 function pgSettings(){
+  const gasStatus = isGASConfigured()
+    ? '<span style="color:var(--green);">🟢 ເຊື່ອມຕໍ່ແລ້ວ</span>'
+    : '<span style="color:var(--red);">🔴 ຍັງບໍ່ໄດ້ຕັ້ງຄ່າ</span>';
   document.getElementById('ct').innerHTML=`
   <div class="g20 ai">
     <div class="ph"><div class="pt">ຕັ້ງຄ່າລະບົບ</div></div>
 
+    <!-- ===== GOOGLE SHEETS SYNC ===== -->
+    <div class="card p24" style="border-color:rgba(0,255,136,0.3);">
+      <div class="st" style="color:var(--green);">🔗 Google Sheets Sync</div>
+      <div style="margin-bottom:12px;font-size:12px;color:var(--text-dim);">
+        ທຸກຄົນທີ່ເຂົ້ານຳ Link ດຽວກັນຈະເຫັນຂໍ້ມູນດຽວກັນ Real-time — ສະຖານະ: ${gasStatus}
+      </div>
+      <div class="fgr" style="margin-bottom:12px;">
+        <label>Google Apps Script Web App URL</label>
+        <input id="gas-url-input" type="text"
+          value="${GAS_URL}"
+          placeholder="https://script.google.com/macros/s/.../exec"
+          style="font-family:'Share Tech Mono',monospace;font-size:12px;">
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <button class="btn btn-green" onclick="saveGASUrl()" style="padding:10px 20px;font-size:13px;">💾 ບັນທຶກ URL</button>
+        <button class="btn btn-outline" onclick="testGASConnection()" style="font-size:12px;">🔍 ທົດສອບການເຊື່ອມຕໍ່</button>
+        <button class="btn btn-red" onclick="clearGASUrl()" style="font-size:12px;">✕ ລຶບ URL</button>
+      </div>
+      <div id="gas-test-result" style="font-size:12px;min-height:18px;font-family:'Share Tech Mono',monospace;"></div>
+      <div style="background:rgba(0,255,136,0.04);border:1px solid rgba(0,255,136,0.15);border-radius:10px;padding:13px;margin-top:12px;font-size:12px;color:var(--text-dim);line-height:1.9;">
+        <div style="color:var(--green);font-weight:700;margin-bottom:6px;">📋 ວິທີໃຊ້:</div>
+        1. ໄປ <b style="color:var(--gold)">script.google.com</b> → ເປີດ Project ຂອງເຈົ້າ<br>
+        2. Deploy → Manage deployments → Copy URL<br>
+        3. ວາງ URL ຂ້າງເທິງ → ກົດ "ບັນທຶກ URL"<br>
+        4. ໄອຄອນ <b style="color:var(--green)">🟢</b> ໃນ topbar = ເຊື່ອມຕໍ່ສຳເລັດ
+      </div>
+    </div>
+
+    <!-- ===== ການຕັ້ງຄ່າທົ່ວໄປ ===== -->
     <div class="card p24">
       <div class="st">ການຕັ້ງຄ່າທົ່ວໄປ</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-bottom:14px;">
@@ -1849,18 +1864,77 @@ function pgSettings(){
     <div class="card p24">
       <div class="st">ຂໍ້ມູນ ແລະ ຄຳສັ່ງ</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <button class="btn btn-blue" onclick="exportAllData()" style="font-size:12px;">📦 Export ຂໍ້ມູນ JSON</button>
-        <button class="btn btn-outline" onclick="importDataPrompt()" style="font-size:12px;">📥 Import ຂໍ້ມູນ</button>
-        <button class="btn btn-red" onclick="resetAll()" style="font-size:12px;">🔄 Reset ຂໍ້ມູນ Default</button>
+        <button class="btn btn-blue" onclick="exportAllData()" style="font-size:12px;">📦 Export JSON</button>
+        <button class="btn btn-outline" onclick="importDataPrompt()" style="font-size:12px;">📥 Import JSON</button>
+        <button class="btn btn-red" onclick="resetAll()" style="font-size:12px;">🔄 Reset Default</button>
       </div>
     </div>
 
     <div class="card p24">
       <div class="st">ຂໍ້ມູນລະບົບ</div>
-      ${[['ລະບົບ','4Khing Management System v2.0'],['ຖານຂໍ້ມູນ', isGASConfigured() ? '✅ Google Sheets' : '⚠ localStorage (ຍັງບໍ່ໄດ້ຕັ້ງຄ່າ)'],['ພະນັກງານ',DB.employees.length+' ຄົນ'],['ລາຍຮັບທັງໝົດ',DB.revenues.length+' ລາຍການ'],['ລາຍຈ່າຍ',DB.expenses.length+' ລາຍການ'],['Activity Logs',DB.actLogs.length+' ລາຍການ'],['ສະຖານະ','✓ ທຸກລະບົບທຳງານ']].map(([k,v])=>`
+      ${[['ລະບົບ','4Khing Management System v2.0'],
+         ['Google Sheets', isGASConfigured() ? '✅ ເຊື່ອມຕໍ່ແລ້ວ' : '⚠ ຍັງບໍ່ໄດ້ຕັ້ງຄ່າ'],
+         ['ພະນັກງານ',DB.employees.length+' ຄົນ'],
+         ['ລາຍຮັບທັງໝົດ',DB.revenues.length+' ລາຍການ'],
+         ['ລາຍຈ່າຍ',DB.expenses.length+' ລາຍການ'],
+         ['Activity Logs',DB.actLogs.length+' ລາຍການ'],
+         ['ສະຖານະ','✓ ທຸກລະບົບທຳງານ']
+        ].map(([k,v])=>`
       <div class="rrow2"><span class="td">${k}</span><span style="color:var(--green);font-size:13px;">${v}</span></div>`).join('')}
     </div>
   </div>`;
+}
+
+// ===== GAS URL MANAGEMENT =====
+function saveGASUrl(){
+  const val = document.getElementById('gas-url-input').value.trim();
+  if(!val){ showToast('ກະລຸນາໃສ່ URL','error'); return; }
+  if(!val.startsWith('https://script.google.com')){
+    showToast('URL ຕ້ອງຂຶ້ນຕົ້ນດ້ວຍ https://script.google.com','error'); return;
+  }
+  GAS_URL = val;
+  localStorage.setItem(GAS_KEY, GAS_URL);
+  _syncIndicator = document.getElementById('syncind');
+  showSyncStatus('saved');
+  showToast('✅ ບັນທຶກ URL ສຳເລັດ — ກຳລັງທົດສອບ...');
+  setTimeout(()=>testGASConnection(), 500);
+}
+
+function clearGASUrl(){
+  GAS_URL = '';
+  localStorage.removeItem(GAS_KEY);
+  _syncIndicator = document.getElementById('syncind');
+  showSyncStatus('error');
+  const el = document.getElementById('gas-url-input');
+  if(el) el.value = '';
+  const r = document.getElementById('gas-test-result');
+  if(r){ r.textContent = '⚠ URL ຖືກລຶບແລ້ວ'; r.style.color='var(--red)'; }
+  showToast('ລຶບ URL ແລ້ວ');
+}
+
+async function testGASConnection(){
+  const r = document.getElementById('gas-test-result');
+  if(!isGASConfigured()){
+    if(r){ r.textContent = '⚠ ໃສ່ URL ກ່ອນ'; r.style.color='var(--red)'; }
+    return;
+  }
+  if(r){ r.textContent = '⏳ ກຳລັງທົດສອບ...'; r.style.color='var(--text-dim)'; }
+  try{
+    const result = await gasRequest('load');
+    if(result && result.ok){
+      if(r){ r.textContent = '✅ ເຊື່ອມຕໍ່ສຳເລັດ! Apps Script ເຮັດວຽກປົກກະຕິ'; r.style.color='var(--green)'; }
+      showSyncStatus('saved');
+      showToast('✅ ເຊື່ອມຕໍ່ Google Sheets ສຳເລັດ');
+      // Fresh load from cloud
+      const fresh = await loadData();
+      if(fresh){ Object.assign(DB, fresh); navigate('settings'); }
+    } else {
+      throw new Error(result?.error || 'Unknown error');
+    }
+  }catch(e){
+    if(r){ r.textContent = '❌ ການເຊື່ອມຕໍ່ລົ້ມເຫຼວ: '+e.message; r.style.color='var(--red)'; }
+    showSyncStatus('error');
+  }
 }
 
 function saveSettings(){
